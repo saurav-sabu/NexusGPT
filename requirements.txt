@@ -1,0 +1,8 @@
+fastapi[standard]
+langchain-core
+langchain-community
+langchain
+langgraph
+langchain-tavily
+tavily-python
+sqlalchemy
