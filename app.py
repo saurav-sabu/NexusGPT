@@ -1,3 +1,11 @@
+"""
+NexusGPT FastAPI Backend Application.
+
+This module acts as the primary web server interface for NexusGPT.
+It exposes REST endpoints for conversation listing, message history retrieval,
+multi-turn interactive chat (using LangGraph execution), and document upload (for local RAG processing).
+"""
+
 import json
 import uuid
 import shutil
@@ -11,16 +19,17 @@ from database.database import *
 from rag.rag import add_document_to_rag
 from tools.tools import set_current_thread_id
 
+# Instantiate FastAPI application
 app = FastAPI(title="NexusGPT API")
 
-# Ensure required directories exist
+# Ensure necessary application workspace directories exist
 Path("uploads").mkdir(exist_ok=True)
 Path("./data").mkdir(exist_ok=True)
 
-# Initialize Database
+# Initialize schema tables in the SQLite database
 init_db()
 
-# Configure CORS
+# Enable Cross-Origin Resource Sharing (CORS) for external frontend clients
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,17 +38,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 class ChatRequest(BaseModel):
+    """
+    Pydantic request validation model for chat interaction.
+    """
     message: str
     thread_id: str | None = None
     model_name: str | None = None
 
+
 @app.get("/")
 def read_root():
+    """
+    Root diagnostics endpoint to check API server status.
+    """
     return {"status": "ok", "app": "NexusGPT API"}
+
 
 @app.get("/api/conversations")
 def get_conversations():
+    """
+    Retrieve a list of all active or saved conversation threads.
+
+    Returns:
+        A list of conversations with IDs, thread details, and timestamps.
+    """
     try:
         convs = list_conversation()
         return [
@@ -54,8 +78,18 @@ def get_conversations():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/api/conversations/{thread_id}/history")
 def get_history(thread_id: str):
+    """
+    Fetch the complete chronological chat log for a given thread.
+
+    Args:
+        thread_id: Unique string identifier for the target conversation.
+
+    Returns:
+        List of chat message logs with sender roles, content, and creation timestamps.
+    """
     try:
         history = get_chat_history(thread_id)
         return [
@@ -69,7 +103,19 @@ def get_history(thread_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 def extract_text_content(content) -> str:
+    """
+    Normalize and convert LangChain message contents into a clean text string.
+
+    Supports simple strings, lists of message blocks, and dictionaries.
+
+    Args:
+        content: Raw output from the LangChain agent's AI message.
+
+    Returns:
+        A unified string containing the extracted text content.
+    """
     if isinstance(content, str):
         return content
     elif isinstance(content, list):
@@ -82,35 +128,49 @@ def extract_text_content(content) -> str:
         return "".join(text_parts)
     return str(content)
 
+
 @app.post("/api/chat")
 def chat(payload: ChatRequest):
+    """
+    Execute a turn of the conversation with NexusGPT agent.
+
+    This endpoint maps incoming chat requests, registers the thread ID in tools context,
+    records messages to the database history, invokes the LangGraph state machine,
+    saves the agent's response, and returns it.
+
+    Args:
+        payload: Pydantic ChatRequest payload containing message and thread configurations.
+
+    Returns:
+        A dictionary containing the agent response and the conversation thread ID.
+    """
     try:
         thread_id = payload.thread_id or str(uuid.uuid4())
         message = payload.message
         model_name = payload.model_name
         
-        # Set thread_id globally for tools
+        # Configure thread context globally for state-reliant tools (like memory/RAG)
         set_current_thread_id(thread_id)
         
-        # Create/Update conversation and save human message
+        # Insert conversation metadata and log the user's message
         create_or_update_conversation(thread_id, first_message=message)
         save_chat_message(thread_id, "user", message)
         
-        # Retrieve agent
+        # Retrieve the requested model variant of the agent
         agent = get_agent(model_name)
         
-        # Run agent
+        # Set thread configurations for LangGraph checkpointers
         config = {"configurable": {"thread_id": thread_id}}
         input_messages = {"messages": [HumanMessage(content=message)]}
         
-        # Run agent graph
+        # Execute the agent graph loop (including potential tool usage cycles)
         response = agent.invoke(input_messages, config=config)
         
-        # Retrieve agent's output response
+        # Extract the final textual response returned by the chatbot
         ai_message = response["messages"][-1]
         response_text = extract_text_content(ai_message.content)
         
-        # Save assistant's message to db
+        # Persist the chatbot's message in the database logs
         save_chat_message(thread_id, "assistant", response_text)
         
         return {
@@ -121,22 +181,36 @@ def chat(payload: ChatRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/api/upload")
 def upload_file(file: UploadFile = File(...), thread_id: str = Form(...)):
+    """
+    Upload a document and index its contents into the RAG database for the thread.
+
+    Receives the uploaded file via multipart/form-data request, writes it locally,
+    parses it, splits it, and embeds it into Chroma vector database.
+
+    Args:
+        file: The uploaded document file object.
+        thread_id: The specific thread context to bind the document scope to.
+
+    Returns:
+        A dictionary showing filename, chunk size metrics, and thread ID details.
+    """
     try:
-        # Set thread_id globally for tools
+        # Establish global thread identifier context for tools
         set_current_thread_id(thread_id)
         
-        # Ensure uploads directory exists
+        # Re-ensure local upload directory exists
         uploads_dir = Path("uploads")
         uploads_dir.mkdir(exist_ok=True)
         
-        # Save the uploaded file
+        # Save file to disk
         file_path = uploads_dir / file.filename
         with file_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        # Add document to RAG
+        # Parse and load document chunks into the Chroma DB Vector Store
         rag_result = add_document_to_rag(str(file_path), thread_id)
         
         return {
@@ -146,4 +220,4 @@ def upload_file(file: UploadFile = File(...), thread_id: str = Form(...)):
             "thread_id": thread_id
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
