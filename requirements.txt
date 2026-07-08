@@ -6,3 +6,9 @@ langgraph
 langchain-tavily
 tavily-python
 sqlalchemy
+langgraph-checkpoint-sqlite
+langchain-google-genai
+numexpr
+langchain-chroma
+pypdf
+docx2txt
