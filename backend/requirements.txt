@@ -12,3 +12,4 @@ numexpr
 langchain-chroma
 pypdf
 docx2txt
+arxiv
