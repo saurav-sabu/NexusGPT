@@ -1,0 +1,25 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local virtual environment
+.venv/
+venv/
+env/
+
+# Databases and user uploads
+data/
+chroma_db/
+uploads/
+
+# Environment configurations and secrets
+.env
+
+# Git files
+.git/
+.gitignore
+
+# OS specific files
+.DS_Store
+Thumbs.db
